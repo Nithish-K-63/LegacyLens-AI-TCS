@@ -1,0 +1,20 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CUSTREC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-CUST-ID        PIC X(10).
+       01 WS-CREDIT-BAL     PIC 9(7)V99.
+       PROCEDURE DIVISION.
+       0100-UPDATE-CREDIT.
+           EXEC SQL
+               UPDATE CUSTOMER_CREDIT
+               SET BALANCE = :WS-CREDIT-BAL
+               WHERE CUSTOMER_ID = :WS-CUST-ID
+           END-EXEC.
+           PERFORM 0200-CHECK-STATUS.
+       0200-CHECK-STATUS.
+           IF WS-CREDIT-BAL > 10000.00
+               DISPLAY "CREDIT LIMIT EXCEEDED"
+           END-IF.
+           STOP RUN.
+
