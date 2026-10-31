@@ -43,6 +43,7 @@ from backend.services.product_analyzer import (
 )
 from backend.services.token_tracker import TokenTracker
 from backend.services.deduplicator import deduplicate_findings, deduplicate_business_rules
+from backend.services.version_analyzer import audit_project_technologies_and_versions
 
 app = FastAPI(
     title="OmniStrat API",
@@ -152,6 +153,7 @@ def _create_demo_record() -> AnalysisRecord:
     ]
     risks, matrix, layer_scores = assess_modernization_risks(nodes, demo_findings)
     phases, tests, arch = generate_modernization_roadmap(rules, risks)
+    demo_versions = audit_project_technologies_and_versions("", [])
 
     return AnalysisRecord(
         id="demo",
@@ -307,6 +309,7 @@ def _create_demo_record() -> AnalysisRecord:
                 {"name": "warehouse.wsdl", "path": "interfaces/warehouse.wsdl", "type": "file", "size_bytes": 11300, "language": "WSDL", "role": "External Integration"}
             ]}
         ],
+        version_audit=demo_versions,
         token_usage={
             "prompt_tokens": 1420,
             "candidate_tokens": 580,
@@ -348,45 +351,52 @@ def _execute_analysis_pipeline(analysis_id: str, working_dir: str, project_name:
     record = ANALYSES_DB[analysis_id]
     token_tracker = TokenTracker(analysis_id, model_name=gemini_service.model_name)
     try:
-        # Step 1: Inventory & Root Identification
-        record.stage = "inventory"
-        record.progress = 15
+        # Step 1: Input Validation & Inventory
+        record.stage = "validation"
+        record.progress = 5
         inventory = scan_file_inventory(working_dir)
 
-        # Step 2: Static Analysis & Deduplication
-        record.stage = "dependencies"
-        record.progress = 35
+        record.stage = "inventory"
+        record.progress = 15
+
+        # Step 2: Technology Requirements & Version Audit
+        record.stage = "version_audit"
+        record.progress = 25
+        version_audits = audit_project_technologies_and_versions(working_dir, inventory)
+
+        # Step 3: Static Analysis
+        record.stage = "static_analysis"
+        record.progress = 40
         static_res = analyze_codebase(working_dir, inventory)
-        # Deduplicate static findings
+
+        # Step 4: Evidence Deduplication
+        record.stage = "deduplication"
+        record.progress = 55
         raw_findings = static_res.get("findings", [])
         deduped_findings = deduplicate_findings(raw_findings)
         static_res["findings"] = deduped_findings
 
-        # Step 3: Technology & Product Understanding
+        # Step 5: Technology & Product Understanding
         record.stage = "product_understanding"
-        record.progress = 50
+        record.progress = 65
         profile = analyze_product_profile(
             working_dir,
             inventory,
             static_res["language_distribution"],
             static_res["total_loc"]
         )
-
-        # Step 4: Real Pipeline Reconstruction & Module Tree
-        record.stage = "pipeline_reconstruction"
-        record.progress = 65
         pipelines = reconstruct_product_pipelines(
             working_dir, inventory, static_res, profile
         )
         module_tree = build_module_tree(working_dir, inventory, findings=deduped_findings)
 
-        # Step 5: Dependencies & Database Contention
-        record.stage = "business_rules"
+        # Step 6: Dependencies & Database Contention
+        record.stage = "dependencies"
         record.progress = 75
         nodes, edges = build_dependency_graph(inventory, static_res)
         db_res = analyze_database_interactions(inventory, deduped_findings)
 
-        # Step 6: Business Rules Extraction & Modernization Risks
+        # Step 7: Business Rules & Risk Assessment
         record.stage = "risk_assessment"
         record.progress = 85
         raw_rules = extract_business_rules(inventory, static_res)
@@ -394,7 +404,7 @@ def _execute_analysis_pipeline(analysis_id: str, working_dir: str, project_name:
         risks, matrix, layer_scores = assess_modernization_risks(nodes, deduped_findings, file_inventory=inventory)
         phases, tests, arch = generate_modernization_roadmap(rules, risks)
 
-        # Step 7: Report & AI Summary with Token Tracking
+        # Step 8: Report & AI Summary with Token Tracking
         record.stage = "report_generation"
         record.progress = 95
         
@@ -435,6 +445,7 @@ def _execute_analysis_pipeline(analysis_id: str, working_dir: str, project_name:
         record.product_profile = profile
         record.pipelines = pipelines
         record.module_tree = module_tree
+        record.version_audit = version_audits
         record.token_usage = token_tracker.to_schema()
         record.executive_summary = exec_summary
         record.ai_enabled = gemini_service.is_configured()
@@ -479,8 +490,8 @@ def analyze_repository(req: RepositoryAnalysisRequest, background_tasks: Backgro
         id=analysis_id,
         project_name=project_name,
         status="analyzing",
-        progress=10,
-        stage="inventory",
+        progress=0,
+        stage="queued",
         created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         repo_url=repo_url
     )
@@ -545,8 +556,8 @@ async def analyze_upload(
         id=analysis_id,
         project_name=p_name,
         status="analyzing",
-        progress=10,
-        stage="inventory",
+        progress=0,
+        stage="queued",
         created_at=datetime.datetime.now(datetime.timezone.utc).isoformat()
     )
     ANALYSES_DB[analysis_id] = record
@@ -629,6 +640,23 @@ def get_analysis_heatmap(analysis_id: str):
         matrix=matrix,
         layer_scores=layer_scores
     )
+
+
+@app.get("/api/analysis/{analysis_id}/versions")
+def get_analysis_versions(analysis_id: str):
+    """Retrieve technology requirements and version audit."""
+    if not sanitize_analysis_id(analysis_id):
+        raise HTTPException(status_code=400, detail="Invalid analysis ID")
+
+    record = ANALYSES_DB.get(analysis_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    return {
+        "analysis_id": record.id,
+        "project_name": record.project_name,
+        "version_audit": [v.model_dump() for v in record.version_audit]
+    }
 
 
 @app.get("/api/settings/gemini", response_model=GeminiSettingsResponse)
@@ -716,7 +744,8 @@ def get_analysis_report(analysis_id: str, format: str = Query("json", pattern="^
         return PlainTextResponse(content, media_type="text/markdown")
     else:
         content = generate_json_report(record)
-        return JSONResponse(content=json.loads(content), media_type="application/json")
+        json_data = json.loads(content) if isinstance(content, str) else content
+        return JSONResponse(content=json_data, media_type="application/json")
 
 
 @app.get("/api/analysis/{analysis_id}/pipeline")

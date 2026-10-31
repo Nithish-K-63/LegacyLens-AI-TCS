@@ -20,6 +20,7 @@ const navSections = [
       { label: "Business Rules", icon: "book" },
       { label: "Dependencies", icon: "nodes" },
       { label: "Risk Heatmap", icon: "risk" },
+      { label: "Technology Audit", icon: "check" },
     ],
   },
   {
@@ -868,7 +869,7 @@ function UploadPage({ go, onStartAnalysis, activeProjectName }) {
 }
 
 // 3. Analysis Progress Page
-function AnalysisPage({ analysisId, record, onCompleted, go }) {
+function AnalysisPage({ analysisId, record, onCompleted, go, onNavigateToCode }) {
   const [statusData, setStatusData] = useState(null);
   const [polling, setPolling] = useState(true);
 
@@ -986,7 +987,7 @@ function AnalysisPage({ analysisId, record, onCompleted, go }) {
             <p>{isDone ? "All analysis stages executed cleanly." : "Currently executing pipeline stages..."}</p>
           </div>
           {isDone && (
-            <Button onClick={() => go("Code Intelligence")}>
+            <Button onClick={() => (onNavigateToCode ? onNavigateToCode("") : go("Code Intelligence"))}>
               View findings <Icon name="arrow" size={16} />
             </Button>
           )}
@@ -1385,6 +1386,11 @@ function CodeIntelligencePage({ findings = [], initialSearch = "" }) {
     }
   }, [initialSearch]);
 
+  const critCount = (findings || []).filter((f) => f.severity === "Critical").length;
+  const highCount = (findings || []).filter((f) => f.severity === "High").length;
+  const medLowCount = (findings || []).filter((f) => f.severity === "Medium" || f.severity === "Low").length;
+  const reviewCount = (findings || []).filter((f) => f.review === "Needs Investigation").length;
+
   const filtered = (findings || []).filter(
     (f) =>
       (severityFilter === "All" || f.severity === severityFilter) &&
@@ -1398,6 +1404,28 @@ function CodeIntelligencePage({ findings = [], initialSearch = "" }) {
         title="Code intelligence"
         description="Inspect findings with source evidence, impact, and uncertainty."
       />
+      <div className="summary-strip" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 18 }}>
+        <div className="card" style={{ padding: "12px 16px" }}>
+          <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>Total Discovered Findings</span>
+          <strong style={{ display: "block", fontSize: 22, fontWeight: 700, marginTop: 4 }}>{findings.length}</strong>
+        </div>
+        <div className="card" style={{ padding: "12px 16px", borderLeft: "4px solid #ef4444" }}>
+          <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>Critical Severity</span>
+          <strong style={{ display: "block", fontSize: 22, fontWeight: 700, marginTop: 4, color: "#ef4444" }}>{critCount}</strong>
+        </div>
+        <div className="card" style={{ padding: "12px 16px", borderLeft: "4px solid #f97316" }}>
+          <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>High Severity</span>
+          <strong style={{ display: "block", fontSize: 22, fontWeight: 700, marginTop: 4, color: "#f97316" }}>{highCount}</strong>
+        </div>
+        <div className="card" style={{ padding: "12px 16px", borderLeft: "4px solid #3b82f6" }}>
+          <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>Medium / Low</span>
+          <strong style={{ display: "block", fontSize: 22, fontWeight: 700, marginTop: 4, color: "#3b82f6" }}>{medLowCount}</strong>
+        </div>
+        <div className="card" style={{ padding: "12px 16px", borderLeft: "4px solid #eab308" }}>
+          <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>Needs Investigation</span>
+          <strong style={{ display: "block", fontSize: 22, fontWeight: 700, marginTop: 4, color: "#eab308" }}>{reviewCount}</strong>
+        </div>
+      </div>
       <div className="toolbar">
         <SearchInput value={search} onChange={setSearch} placeholder="Search findings or files…" />
         <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
@@ -1457,10 +1485,27 @@ function CodeIntelligencePage({ findings = [], initialSearch = "" }) {
           </table>
         </div>
         {filtered.length === 0 && (
-          <div className="empty">
+          <div className="empty" style={{ padding: "32px 16px", textAlign: "center" }}>
             <Icon name="search" />
             <h3>No findings match</h3>
-            <p>Try widening your search or filters.</p>
+            <p>
+              {findings.length > 0
+                ? "Try widening your search terms or clearing active severity and review filters."
+                : "No code intelligence findings recorded. Run an analysis on a repository or upload a ZIP archive."}
+            </p>
+            {findings.length > 0 && (
+              <Button
+                variant="secondary"
+                style={{ marginTop: 12 }}
+                onClick={() => {
+                  setSearch("");
+                  setSeverityFilter("All");
+                  setReviewFilter("All");
+                }}
+              >
+                Reset filters
+              </Button>
+            )}
           </div>
         )}
       </section>
@@ -1626,9 +1671,242 @@ function BusinessRulesPage({ rules = [] }) {
 }
 
 // 6. Dependencies Page
+// 4b. Technology Requirements & Version Audit Page
+function TechnologyAuditPage({ versionAudit = [], projectName = "Project" }) {
+  const [search, setSearch] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState("All");
+  const [selectedAudit, setSelectedAudit] = useState(null);
+
+  const filtered = useMemo(() => {
+    return (versionAudit || []).filter((v) => {
+      const matchPri = priorityFilter === "All" || v.upgrade_priority === priorityFilter;
+      const q = search.toLowerCase();
+      const matchSearch =
+        !q ||
+        (v.component || "").toLowerCase().includes(q) ||
+        (v.category || "").toLowerCase().includes(q) ||
+        (v.reason || "").toLowerCase().includes(q);
+      return matchPri && matchSearch;
+    });
+  }, [versionAudit, priorityFilter, search]);
+
+  const criticalCount = (versionAudit || []).filter((v) => v.upgrade_priority === "Critical").length;
+  const highCount = (versionAudit || []).filter((v) => v.upgrade_priority === "High").length;
+  const noUpgradeCount = (versionAudit || []).filter((v) => v.upgrade_priority === "No Upgrade Needed").length;
+
+  return (
+    <>
+      <PageHeader
+        title="Technology & Version Audit"
+        description="Inspect declared vs resolved technology versions, EOL support status, and 12-field upgrade explanations."
+      />
+
+      <div className="summary-strip" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 20 }}>
+        <div className="card" style={{ padding: "14px 16px" }}>
+          <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>Total Dependencies Audited</span>
+          <strong style={{ display: "block", fontSize: 24, fontWeight: 700, marginTop: 4 }}>{versionAudit.length}</strong>
+        </div>
+        <div className="card" style={{ padding: "14px 16px", borderLeft: "4px solid #ef4444" }}>
+          <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>Critical Priority</span>
+          <strong style={{ display: "block", fontSize: 24, fontWeight: 700, marginTop: 4, color: "#ef4444" }}>{criticalCount}</strong>
+        </div>
+        <div className="card" style={{ padding: "14px 16px", borderLeft: "4px solid #f97316" }}>
+          <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>High Priority</span>
+          <strong style={{ display: "block", fontSize: 24, fontWeight: 700, marginTop: 4, color: "#f97316" }}>{highCount}</strong>
+        </div>
+        <div className="card" style={{ padding: "14px 16px", borderLeft: "4px solid #22c55e" }}>
+          <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>Supported & Stable</span>
+          <strong style={{ display: "block", fontSize: 24, fontWeight: 700, marginTop: 4, color: "#22c55e" }}>{noUpgradeCount}</strong>
+        </div>
+      </div>
+
+      <div className="toolbar">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search component or framework…" />
+        <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
+          <option>All</option>
+          <option>Critical</option>
+          <option>High</option>
+          <option>Medium</option>
+          <option>Low</option>
+          <option>No Upgrade Needed</option>
+        </select>
+      </div>
+
+      <section className="card table-card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Component</th>
+                <th>Category</th>
+                <th>Declared</th>
+                <th>Resolved</th>
+                <th>Target Version</th>
+                <th>Support</th>
+                <th>Security</th>
+                <th>Priority</th>
+                <th>Action</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((v, i) => (
+                <tr key={i} onClick={() => setSelectedAudit(v)} style={{ cursor: "pointer" }}>
+                  <td>
+                    <strong>{v.component}</strong>
+                    <span style={{ fontSize: 11, color: "var(--c-text-muted)", display: "block" }}>{v.source_evidence}</span>
+                  </td>
+                  <td>{v.category}</td>
+                  <td><code>{v.current_version}</code></td>
+                  <td><code>{v.resolved_version || "N/A"}</code></td>
+                  <td><strong style={{ color: "#2563eb" }}>{v.recommended_version}</strong></td>
+                  <td>
+                    <Badge tone={v.support_status === "Supported" ? "success" : v.support_status === "EOL" ? "critical" : "warning"}>
+                      {v.support_status}
+                    </Badge>
+                  </td>
+                  <td>
+                    <Badge tone={v.security_status === "Secure" ? "success" : v.security_status === "Critical CVE" ? "critical" : "warning"}>
+                      {v.security_status}
+                    </Badge>
+                  </td>
+                  <td>
+                    <Badge tone={v.upgrade_priority === "Critical" ? "critical" : v.upgrade_priority === "High" ? "warning" : v.upgrade_priority === "No Upgrade Needed" ? "success" : "neutral"}>
+                      {v.upgrade_priority}
+                    </Badge>
+                  </td>
+                  <td>
+                    <span style={{ fontWeight: 600, fontSize: 13 }}>{v.suggested_action}</span>
+                  </td>
+                  <td>
+                    <Icon name="arrow" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {filtered.length === 0 && (
+          <div className="empty" style={{ padding: "32px 16px", textAlign: "center" }}>
+            <Icon name="search" />
+            <h3>No dependencies match filter</h3>
+            <p>Try widening your search or selecting 'All' in the priority filter.</p>
+            <Button variant="secondary" style={{ marginTop: 12 }} onClick={() => { setSearch(""); setPriorityFilter("All"); }}>
+              Reset filters
+            </Button>
+          </div>
+        )}
+      </section>
+
+      {/* 12-Field Interactive Upgrade Explanation Modal */}
+      {selectedAudit && (
+        <Drawer title={`Upgrade Explanation: ${selectedAudit.component}`} onClose={() => setSelectedAudit(null)}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+            <Badge tone={selectedAudit.upgrade_priority === "Critical" ? "critical" : selectedAudit.upgrade_priority === "High" ? "warning" : "success"}>
+              Priority: {selectedAudit.upgrade_priority}
+            </Badge>
+            <Badge tone="neutral">{selectedAudit.category}</Badge>
+            <Badge tone={selectedAudit.support_status === "Supported" ? "success" : "critical"}>
+              {selectedAudit.support_status}
+            </Badge>
+          </div>
+
+          <h2 style={{ fontSize: 18, margin: "8px 0" }}>{selectedAudit.component} Upgrade Path</h2>
+          <p style={{ color: "var(--c-text-muted)", fontSize: 13, marginBottom: 16 }}>{selectedAudit.reason}</p>
+
+          <DetailItem label="1. Component & Category">
+            <strong>{selectedAudit.component}</strong> ({selectedAudit.category})
+          </DetailItem>
+
+          <DetailItem label="2. Current Version (Declared vs Resolved)">
+            Declared: <code>{selectedAudit.current_version}</code> | Resolved: <code>{selectedAudit.resolved_version || "Not pinned in lockfile"}</code>
+          </DetailItem>
+
+          <DetailItem label="3. Recommended Target Version">
+            <strong style={{ color: "#2563eb", fontSize: 15 }}>{selectedAudit.recommended_version}</strong>
+          </DetailItem>
+
+          <DetailItem label="4. Why Recommended">
+            {selectedAudit.reason}
+          </DetailItem>
+
+          <DetailItem label="5. Source Evidence (Manifest & Line)">
+            <code>{selectedAudit.source_evidence}</code>
+          </DetailItem>
+
+          <DetailItem label="6. Expected Modernization Benefits">
+            {Array.isArray(selectedAudit.benefits) ? (
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {selectedAudit.benefits.map((b, idx) => (
+                  <li key={idx} style={{ marginBottom: 4 }}>{b}</li>
+                ))}
+              </ul>
+            ) : (
+              <p style={{ margin: 0 }}>{selectedAudit.benefits || "Improved security, performance, and long-term LTS support."}</p>
+            )}
+          </DetailItem>
+
+          <DetailItem label="7. Upgrade Risks & Breaking Changes">
+            {(() => {
+              const risks = selectedAudit.risks_and_breaking_changes || selectedAudit.breaking_changes;
+              return Array.isArray(risks) ? (
+                <ul style={{ margin: 0, paddingLeft: 18, color: "#dc2626" }}>
+                  {risks.map((r, idx) => (
+                    <li key={idx} style={{ marginBottom: 4 }}>{r}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p style={{ margin: 0, color: "#dc2626" }}>{risks || "None reported."}</p>
+              );
+            })()}
+          </DetailItem>
+
+          <DetailItem label="8. Dependencies Affected">
+            {(() => {
+              const deps = selectedAudit.dependencies_affected || selectedAudit.affected_dependencies;
+              return Array.isArray(deps) && deps.length > 0
+                ? deps.join(" · ")
+                : (typeof deps === "string" && deps) || "Isolated component — no immediate downstream dependency breaking detected";
+            })()}
+          </DetailItem>
+
+          <DetailItem label="9. Recommended Step-by-Step Upgrade Path">
+            <code>{selectedAudit.recommended_upgrade_path || selectedAudit.upgrade_path || "Review documentation and bump dependency version in manifest."}</code>
+          </DetailItem>
+
+          <DetailItem label="10. Testing Requirements">
+            {Array.isArray(selectedAudit.testing_requirements) ? (
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {selectedAudit.testing_requirements.map((t, idx) => (
+                  <li key={idx} style={{ marginBottom: 4 }}>{t}</li>
+                ))}
+              </ul>
+            ) : (
+              <p style={{ margin: 0 }}>{selectedAudit.testing_requirements || "Execute regression test suite and characterization tests on staging."}</p>
+            )}
+          </DetailItem>
+
+          <DetailItem label="11. Priority Basis">
+            {selectedAudit.priority_basis}
+          </DetailItem>
+
+          <DetailItem label="12. Recommended Action">
+            <Badge tone={selectedAudit.suggested_action === "Upgrade" ? "primary" : selectedAudit.suggested_action === "Keep" ? "success" : "warning"}>
+              {selectedAudit.suggested_action}
+            </Badge>
+            <span style={{ marginLeft: 8, fontSize: 12 }}>{selectedAudit.compatibility_impact}</span>
+          </DetailItem>
+        </Drawer>
+      )}
+    </>
+  );
+}
+
 function DependenciesPage({ modules = [], edges = [], findings = [], databaseSummary = {} }) {
   const [selectedNode, setSelectedNode] = useState(modules[0] || null);
   const [search, setSearch] = useState("");
+  const [zoomLevel, setZoomLevel] = useState(1);
 
   const filteredModules = modules.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
   const findMod = (id) => modules.find((m) => m.id === id);
@@ -1658,9 +1936,37 @@ function DependenciesPage({ modules = [], edges = [], findings = [], databaseSum
               <span><i className="solid" /> Observed</span>
               <span><i className="dashed" /> Inferred</span>
             </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <button
+                type="button"
+                style={{ padding: "3px 8px", fontSize: 13, borderRadius: 5, border: "1px solid var(--border)", background: "transparent", cursor: "pointer", color: "inherit" }}
+                onClick={() => setZoomLevel((z) => Math.min(1.8, +(z + 0.15).toFixed(2)))}
+                title="Zoom In"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                style={{ padding: "3px 8px", fontSize: 13, borderRadius: 5, border: "1px solid var(--border)", background: "transparent", cursor: "pointer", color: "inherit" }}
+                onClick={() => setZoomLevel((z) => Math.max(0.6, +(z - 0.15).toFixed(2)))}
+                title="Zoom Out"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                style={{ padding: "3px 8px", fontSize: 11, borderRadius: 5, border: "1px solid var(--border)", background: "transparent", cursor: "pointer", color: "inherit" }}
+                onClick={() => setZoomLevel(1)}
+                title="Reset Zoom"
+              >
+                Reset
+              </button>
+              <span style={{ fontSize: 11, color: "var(--c-text-muted)" }}>{Math.round(zoomLevel * 100)}%</span>
+            </div>
           </div>
           <div className="graph">
             <svg viewBox="0 0 650 300" role="img" aria-label="Module dependency graph">
+              <g transform={`scale(${zoomLevel})`} style={{ transformOrigin: "325px 150px", transition: "transform 0.15s ease-out" }}>
               <defs>
                 <marker id="arrow" markerWidth="7" height="7" refX="6" refY="3.5" orient="auto">
                   <path d="M0,0 L7,3.5 L0,7 z" />
@@ -1696,6 +2002,7 @@ function DependenciesPage({ modules = [], edges = [], findings = [], databaseSum
                   <text className="node-type" x={n.x + 32} y={n.y + 39}>{n.type}</text>
                 </g>
               ))}
+              </g>
             </svg>
           </div>
         </section>
@@ -1731,6 +2038,58 @@ function DependenciesPage({ modules = [], edges = [], findings = [], databaseSum
                   </div>
                 ))}
             </DetailItem>
+            <DetailItem label="Inbound Dependents (Callers)">
+              {edges
+                .filter((e) => (e.to || e.to_node) === selectedNode?.id)
+                .map((e) => findMod(e.from || e.from_node))
+                .filter(Boolean).length === 0 ? (
+                <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>None (Root entry service)</span>
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {edges
+                    .filter((e) => (e.to || e.to_node) === selectedNode?.id)
+                    .map((e) => findMod(e.from || e.from_node))
+                    .filter(Boolean)
+                    .map((inMod, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setSelectedNode(inMod)}
+                        style={{ padding: "2px 8px", fontSize: 11, borderRadius: 12, border: "1px solid var(--border)", background: "transparent", cursor: "pointer", color: "inherit" }}
+                      >
+                        ← {inMod.name}
+                      </button>
+                    ))}
+                </div>
+              )}
+            </DetailItem>
+
+            <DetailItem label="Outbound Dependencies">
+              {edges
+                .filter((e) => (e.from || e.from_node) === selectedNode?.id)
+                .map((e) => findMod(e.to || e.to_node))
+                .filter(Boolean).length === 0 ? (
+                <span style={{ fontSize: 12, color: "var(--c-text-muted)" }}>None (Leaf / Terminal module)</span>
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {edges
+                    .filter((e) => (e.from || e.from_node) === selectedNode?.id)
+                    .map((e) => findMod(e.to || e.to_node))
+                    .filter(Boolean)
+                    .map((outMod, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setSelectedNode(outMod)}
+                        style={{ padding: "2px 8px", fontSize: 11, borderRadius: 12, border: "1px solid var(--border)", background: "transparent", cursor: "pointer", color: "inherit" }}
+                      >
+                        → {outMod.name}
+                      </button>
+                    ))}
+                </div>
+              )}
+            </DetailItem>
+
             <DetailItem label="Evidence quality">
               Observed edges use static call and schema references. Dashed edges are inferred and require verification.
             </DetailItem>
@@ -2812,6 +3171,8 @@ export default function App() {
 
   const handleStartAnalysis = (newId, pName) => {
     setCurrentAnalysisId(newId);
+    setAnalysisRecord(null);
+    setCodeSearchQuery("");
     setAnalysisHistory((prev) => [{ id: newId, name: pName, status: "Analyzing" }, ...prev]);
   };
 
@@ -2863,6 +3224,7 @@ export default function App() {
             record={analysisRecord}
             onCompleted={handleCompletedAnalysis}
             go={navigateTo}
+            onNavigateToCode={navigateToCode}
           />
         );
       case "Module Explorer":
@@ -2885,6 +3247,13 @@ export default function App() {
         return <CodeIntelligencePage findings={analysisRecord?.findings || []} initialSearch={codeSearchQuery} />;
       case "Business Rules":
         return <BusinessRulesPage rules={analysisRecord?.rules || []} />;
+      case "Technology Audit":
+        return (
+          <TechnologyAuditPage
+            versionAudit={analysisRecord?.version_audit || []}
+            projectName={analysisRecord?.project_name}
+          />
+        );
       case "Dependencies":
         return (
           <DependenciesPage

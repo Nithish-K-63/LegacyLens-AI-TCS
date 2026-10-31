@@ -189,6 +189,17 @@ export async function getProductProfile(analysisId) {
 }
 
 /**
+ * Fetch technology requirements and version audit.
+ */
+export async function getVersionAudit(analysisId) {
+  const res = await fetch(`${API_BASE}/api/analysis/${encodeURIComponent(analysisId)}/versions`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch version audit: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
  * Download or fetch full report in json or markdown format.
  */
 export async function downloadReport(analysisId, format = "json", projectName = "omnistrat") {

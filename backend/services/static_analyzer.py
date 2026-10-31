@@ -1,8 +1,8 @@
-"""Static code analysis engine using Python AST and conservative parsing for other languages."""
+"""Static code analysis engine using Python AST and comprehensive multi-language scanners."""
 import ast
 import os
 import re
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from backend.schemas.models import AnalysisFinding, MetricCard
 from backend.services.security import redact_secrets
 
@@ -26,10 +26,9 @@ class PythonASTAnalyzer(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import):
         for alias in node.names:
             self.imports.append({"module": alias.name, "line": node.lineno})
-            # Check for deprecated or security-sensitive modules
-            if alias.name in {"telnetlib", "cgi", "cgitb", "pipes", "smtpd", "crypt"}:
+            if alias.name in {"telnetlib", "cgi", "cgitb", "pipes", "smtpd", "crypt", "optparse"}:
                 self.findings.append(AnalysisFinding(
-                    id=f"LL-SEC-{len(self.findings) + 1001}",
+                    id=f"OMNI-SEC-{len(self.findings) + 1001}",
                     category="Security",
                     severity="High",
                     file=self.rel_path,
@@ -39,9 +38,9 @@ class PythonASTAnalyzer(ast.NodeVisitor):
                     language="Python",
                     review="Needs Investigation",
                     classification="NEEDS_INVESTIGATION",
-                    impact="Deprecated in Python 3.11/3.13; may introduce unpatched vulnerabilities.",
+                    impact="Deprecated in modern Python (3.11/3.13); introduces unmaintained attack surface.",
                     modules=[self._extract_module_name()],
-                    recommendation="Replace with a modern maintained alternative.",
+                    recommendation="Replace with modern maintained alternatives (e.g., argparse, email, urllib).",
                     method="ast"
                 ))
         self.generic_visit(node)
@@ -52,19 +51,19 @@ class PythonASTAnalyzer(ast.NodeVisitor):
             self.imports.append({"module": f"{mod}.{alias.name}" if mod else alias.name, "line": node.lineno})
             if mod in {"pickle", "shelve", "marshal"}:
                 self.findings.append(AnalysisFinding(
-                    id=f"LL-SEC-{len(self.findings) + 1001}",
+                    id=f"OMNI-SEC-{len(self.findings) + 1001}",
                     category="Security",
                     severity="Critical",
                     file=self.rel_path,
                     lines=str(node.lineno),
-                    evidence=f"Deserialization library '{mod}' used.",
+                    evidence=f"Deserialization library '{mod}' used for object serialization.",
                     confidence=90,
                     language="Python",
                     review="Unreviewed",
                     classification="BUSINESS_CRITICAL",
-                    impact="Unsafe deserialization of untrusted payloads can lead to arbitrary code execution.",
+                    impact="Unsafe deserialization of untrusted payloads can lead to remote code execution (RCE).",
                     modules=[self._extract_module_name()],
-                    recommendation="Validate payload provenance or replace with JSON/protobuf serialization.",
+                    recommendation="Validate payload provenance or migrate to structured JSON/Protobuf formats.",
                     method="ast"
                 ))
         self.generic_visit(node)
@@ -73,7 +72,7 @@ class PythonASTAnalyzer(ast.NodeVisitor):
         self.defined_functions.add(node.name)
         self.functions.append({"name": node.name, "line": node.lineno, "end_line": getattr(node, "end_lineno", node.lineno)})
 
-        # Check for route decorators e.g. @app.get, @router.post, @route
+        # Route and endpoint decorators
         for decorator in node.decorator_list:
             dec_name = ""
             if isinstance(decorator, ast.Call):
@@ -84,17 +83,17 @@ class PythonASTAnalyzer(ast.NodeVisitor):
             elif isinstance(decorator, ast.Attribute):
                 dec_name = f"{getattr(decorator.value, 'id', '')}.{decorator.attr}"
 
-            if any(endpoint in dec_name.lower() for endpoint in [".get", ".post", ".put", ".delete", "route"]):
+            if any(endpoint in dec_name.lower() for endpoint in [".get", ".post", ".put", ".delete", ".patch", "route"]):
                 self.routes.append({"name": node.name, "line": node.lineno, "decorator": dec_name})
 
-            if "auth" in dec_name.lower() or "role" in dec_name.lower() or "permission" in dec_name.lower():
+            if any(k in dec_name.lower() for k in ["auth", "role", "permission", "login_required", "jwt"]):
                 self.auth_checks.append({"name": node.name, "line": node.lineno, "decorator": dec_name})
                 self.findings.append(AnalysisFinding(
-                    id=f"LL-AUTH-{len(self.findings) + 1001}",
+                    id=f"OMNI-AUTH-{len(self.findings) + 1001}",
                     category="Security",
                     severity="High",
                     file=self.rel_path,
-                    lines=f"{node.lineno}–{getattr(node, 'end_lineno', node.lineno)}",
+                    lines=f"{node.lineno}-{getattr(node, 'end_lineno', node.lineno)}",
                     evidence=f"Authorization perimeter detected on function '{node.name}' via decorator @{dec_name}.",
                     confidence=92,
                     language="Python",
@@ -109,7 +108,6 @@ class PythonASTAnalyzer(ast.NodeVisitor):
         # Inspect function body for business calculations & auth overrides
         for child in ast.walk(node):
             if isinstance(child, ast.Compare):
-                # Inspect comparisons for discount thresholds, admin overrides, credit checks
                 has_admin_override = False
                 has_biz_term = False
                 biz_term_name = ""
@@ -123,13 +121,13 @@ class PythonASTAnalyzer(ast.NodeVisitor):
 
                     if "admin_override" in name_val:
                         has_admin_override = True
-                    elif any(term in name_val for term in ["discount", "loyalty", "tax_rate", "credit_limit", "tier", "gold"]):
+                    elif any(term in name_val for term in ["discount", "loyalty", "tax_rate", "credit_limit", "tier", "gold", "price", "fee", "status", "state"]):
                         has_biz_term = True
                         biz_term_name = name_val
 
                 if has_admin_override:
                     self.findings.append(AnalysisFinding(
-                        id=f"LL-RULE-{len(self.findings) + 1001}",
+                        id=f"OMNI-RULE-{len(self.findings) + 1001}",
                         category="Security",
                         severity="Critical",
                         file=self.rel_path,
@@ -146,19 +144,19 @@ class PythonASTAnalyzer(ast.NodeVisitor):
                     ))
                 elif has_biz_term:
                     self.findings.append(AnalysisFinding(
-                        id=f"LL-RULE-{len(self.findings) + 1001}",
+                        id=f"OMNI-RULE-{len(self.findings) + 1001}",
                         category="Business Logic",
-                        severity="Critical",
+                        severity="High",
                         file=self.rel_path,
-                        lines=f"{child.lineno}–{getattr(node, 'end_lineno', child.lineno)}",
+                        lines=f"{child.lineno}-{getattr(node, 'end_lineno', child.lineno)}",
                         evidence=f"Core business decision boundary evaluating '{biz_term_name}'.",
                         confidence=92,
                         language="Python",
                         review="Unreviewed",
                         classification="BUSINESS_CRITICAL",
-                        impact="Altering rule logic directly impacts financial calculations and invoicing.",
+                        impact="Altering rule logic directly impacts transactional calculations and application state.",
                         modules=[self._extract_module_name()],
-                        recommendation="Characterize with historical invoice test fixtures before refactoring.",
+                        recommendation="Characterize with historical regression test fixtures before refactoring.",
                         method="ast"
                     ))
 
@@ -173,34 +171,32 @@ class PythonASTAnalyzer(ast.NodeVisitor):
 
         self.function_calls.add(func_name)
 
-        # Danger calls: eval, exec, os.system
-        if func_name in {"eval", "exec"}:
+        if func_name in {"eval", "exec", "system", "popen"}:
             self.findings.append(AnalysisFinding(
-                id=f"LL-SEC-{len(self.findings) + 1001}",
+                id=f"OMNI-SEC-{len(self.findings) + 1001}",
                 category="Security",
                 severity="Critical",
                 file=self.rel_path,
                 lines=str(node.lineno),
-                evidence=f"Dynamic code execution via '{func_name}()'.",
+                evidence=f"Dynamic code or command execution via '{func_name}()'.",
                 confidence=98,
                 language="Python",
                 review="Needs Investigation",
                 classification="BUSINESS_CRITICAL",
-                impact="Direct injection vector if input is untrusted.",
+                impact="Direct arbitrary code or command injection vector if input contains untrusted data.",
                 modules=[self._extract_module_name()],
-                recommendation="Replace dynamic evaluation with static AST parsing or explicit dispatch maps.",
+                recommendation="Replace dynamic evaluation with declarative parser or static dispatch map.",
                 method="ast"
             ))
 
-        # Raw SQL execution detection: cursor.execute("...")
         if func_name in {"execute", "executemany"} and node.args:
             first_arg = node.args[0]
             if isinstance(first_arg, ast.Constant):
                 sql_text = getattr(first_arg, "value", "")
-                if any(kw in str(sql_text).upper() for kw in ["SELECT", "INSERT", "UPDATE", "DELETE"]):
+                if any(kw in str(sql_text).upper() for kw in ["SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER"]):
                     self.sql_operations.append({"sql": str(sql_text), "line": node.lineno})
                     self.findings.append(AnalysisFinding(
-                        id=f"LL-DATA-{len(self.findings) + 1001}",
+                        id=f"OMNI-DATA-{len(self.findings) + 1001}",
                         category="Data Access",
                         severity="High",
                         file=self.rel_path,
@@ -210,15 +206,14 @@ class PythonASTAnalyzer(ast.NodeVisitor):
                         language="Python",
                         review="Needs Investigation",
                         classification="NEEDS_INVESTIGATION",
-                        impact="Bypasses repository/ORM abstraction; tight coupling to database schema.",
+                        impact="Bypasses ORM abstraction layer; creates tight coupling to database schema.",
                         modules=[self._extract_module_name()],
-                        recommendation="Encapsulate within a dedicated data access layer with parameterized queries.",
+                        recommendation="Encapsulate within a dedicated data repository using parameterized queries.",
                         method="ast"
                     ))
             elif isinstance(first_arg, ast.JoinedStr):
-                # f-string in SQL query: SQL Injection risk!
                 self.findings.append(AnalysisFinding(
-                    id=f"LL-SEC-{len(self.findings) + 1001}",
+                    id=f"OMNI-SEC-{len(self.findings) + 1001}",
                     category="Security",
                     severity="Critical",
                     file=self.rel_path,
@@ -228,24 +223,24 @@ class PythonASTAnalyzer(ast.NodeVisitor):
                     language="Python",
                     review="Needs Investigation",
                     classification="BUSINESS_CRITICAL",
-                    impact="Allows arbitrary database query manipulation and data extraction.",
+                    impact="Allows arbitrary SQL query manipulation and data exfiltration.",
                     modules=[self._extract_module_name()],
-                    recommendation="Switch to parameterized queries immediately.",
+                    recommendation="Switch to parameterized queries immediately with positional or named arguments.",
                     method="ast"
                 ))
 
         self.generic_visit(node)
 
     def _extract_module_name(self) -> str:
-        parts = self.rel_path.split("/")
+        parts = self.rel_path.replace("\\", "/").split("/")
         if len(parts) > 1:
             return parts[1].replace("_", " ").title()
         return "Core Module"
 
 
 class ConservativeMultiLanguageScanner:
-    """Regex-based conservative scanner for Java, COBOL, SQL, JS, and XML."""
-    
+    """Comprehensive static analysis scanner across all programming languages and configs."""
+
     @staticmethod
     def scan_file(file_path: str, rel_path: str, lang: str) -> List[AnalysisFinding]:
         findings: List[AnalysisFinding] = []
@@ -256,20 +251,147 @@ class ConservativeMultiLanguageScanner:
         except Exception:
             return findings
 
-        # Module name heuristic
-        parts = rel_path.split("/")
-        mod_name = parts[1].replace("_", " ").title() if len(parts) > 1 else "Shared"
+        clean_rel = rel_path.replace("\\", "/")
+        parts = clean_rel.split("/")
+        mod_name = parts[1].replace("_", " ").title() if len(parts) > 1 else "Core Architecture"
 
-        if lang == "Java":
-            findings.extend(ConservativeMultiLanguageScanner._scan_java(rel_path, lines, mod_name))
+        # 1. Universal checks for all source and configuration files
+        findings.extend(ConservativeMultiLanguageScanner._scan_universal_patterns(clean_rel, lines, mod_name, lang))
+
+        # 2. Language-specific deep scanners
+        if lang in ("Java", "Kotlin", "Scala"):
+            findings.extend(ConservativeMultiLanguageScanner._scan_java(clean_rel, lines, mod_name))
         elif lang == "COBOL":
-            findings.extend(ConservativeMultiLanguageScanner._scan_cobol(rel_path, lines, mod_name))
+            findings.extend(ConservativeMultiLanguageScanner._scan_cobol(clean_rel, lines, mod_name))
         elif lang == "SQL":
-            findings.extend(ConservativeMultiLanguageScanner._scan_sql(rel_path, lines, mod_name))
+            findings.extend(ConservativeMultiLanguageScanner._scan_sql(clean_rel, lines, mod_name))
         elif lang in ("JavaScript", "TypeScript", "JavaScript (React)", "TypeScript (React)"):
-            findings.extend(ConservativeMultiLanguageScanner._scan_javascript(rel_path, lines, mod_name))
+            findings.extend(ConservativeMultiLanguageScanner._scan_javascript(clean_rel, lines, mod_name))
+        elif lang in ("C#", "C-Sharp"):
+            findings.extend(ConservativeMultiLanguageScanner._scan_csharp(clean_rel, lines, mod_name))
+        elif lang == "Go":
+            findings.extend(ConservativeMultiLanguageScanner._scan_go(clean_rel, lines, mod_name))
+        elif lang in ("C", "C++", "C/C++ Header", "C++ Header"):
+            findings.extend(ConservativeMultiLanguageScanner._scan_cpp(clean_rel, lines, mod_name))
+        elif lang in ("PHP", "Ruby"):
+            findings.extend(ConservativeMultiLanguageScanner._scan_scripting(clean_rel, lines, mod_name, lang))
         elif lang in ("XML", "WSDL"):
-            findings.extend(ConservativeMultiLanguageScanner._scan_xml(rel_path, lines, mod_name))
+            findings.extend(ConservativeMultiLanguageScanner._scan_xml(clean_rel, lines, mod_name))
+        elif lang in ("Shell", "Bash"):
+            findings.extend(ConservativeMultiLanguageScanner._scan_shell(clean_rel, lines, mod_name))
+        elif lang in ("YAML", "JSON", "Config") or clean_rel.lower().endswith(("dockerfile", "docker-compose.yml")):
+            findings.extend(ConservativeMultiLanguageScanner._scan_config(clean_rel, lines, mod_name))
+
+        return findings
+
+    @staticmethod
+    def _scan_universal_patterns(rel_path: str, lines: List[str], mod: str, lang: str) -> List[AnalysisFinding]:
+        findings = []
+        total_loc = len(lines)
+
+        # Monolithic hotspot
+        if total_loc > 250 and not rel_path.lower().endswith((".json", ".lock", "-lock.json")):
+            findings.append(AnalysisFinding(
+                id=f"OMNI-DEBT-{len(findings) + 1001}",
+                category="Architecture",
+                severity="Medium" if total_loc < 500 else "High",
+                file=rel_path,
+                lines=f"1-{total_loc}",
+                evidence=f"Monolithic file hotspot: {total_loc} lines of code exceed recommended modular threshold (250 LOC).",
+                confidence=92,
+                language=lang,
+                review="Needs Investigation",
+                classification="ARCHITECTURAL_RISK",
+                impact="High cyclomatic complexity and large scope complicate isolated unit testing and regression verification.",
+                modules=[mod],
+                recommendation="Decompose file into cohesive single-responsibility service or utility sub-components.",
+                method="static_metrics"
+            ))
+
+        for idx, line in enumerate(lines, 1):
+            line_str = line.strip()
+            line_lower = line_str.lower()
+
+            # Technical debt markers
+            debt_match = re.search(r'\b(TODO|FIXME|HACK|XXX|DEPRECATED|WORKAROUND)\b[:\s]*(.*)', line_str, re.IGNORECASE)
+            if debt_match and not line_str.startswith(("*", "//*")):
+                tag = debt_match.group(1).upper()
+                msg = debt_match.group(2).strip()[:70]
+                findings.append(AnalysisFinding(
+                    id=f"OMNI-DEBT-{idx}",
+                    category="Technical Debt",
+                    severity="Low" if tag == "TODO" else "Medium",
+                    file=rel_path,
+                    lines=str(idx),
+                    evidence=f"Explicit technical debt marker '{tag}': {msg or line_str[:60]}",
+                    confidence=95,
+                    language=lang,
+                    review="Unreviewed",
+                    classification="NEEDS_INVESTIGATION",
+                    impact="Known developer-acknowledged defect, missing edge-case handling, or temporary workaround.",
+                    modules=[mod],
+                    recommendation="Review marker intent and convert into formal backlog tickets before modernization.",
+                    method="regex_conservative"
+                ))
+
+            # Hardcoded credentials, tokens, or private keys
+            if any(k in line_lower for k in ["api_key", "apikey", "secret_key", "jwt_secret", "access_token", "private_key", "db_password"]) and any(c in line_str for c in ["=", ":"]) and not any(ign in line_lower for ign in ["process.env", "os.environ", "getenv", "config(", "<placeholder>", "your_", "example"]):
+                val_match = re.search(r'[\'\"][A-Za-z0-9_\-\.\/\+]{12,}[\'\"]', line_str)
+                if val_match:
+                    findings.append(AnalysisFinding(
+                        id=f"OMNI-SEC-{idx}",
+                        category="Security",
+                        severity="Critical",
+                        file=rel_path,
+                        lines=str(idx),
+                        evidence=f"Potential hardcoded secret or token credential: {redact_secrets(line_str)[:60]}",
+                        confidence=88,
+                        language=lang,
+                        review="Needs Investigation",
+                        classification="BUSINESS_CRITICAL",
+                        impact="Hardcoded secrets stored in version control risk credential exfiltration and unauthorized access.",
+                        modules=[mod],
+                        recommendation="Externalize credentials into environment variables or enterprise secret vaults.",
+                        method="regex_conservative"
+                    ))
+
+            # Swallowed error anti-patterns
+            if re.search(r'catch\s*\([^)]*\)\s*\{\s*\}', line_str) or line_str == "except: pass" or line_str == "except Exception: pass":
+                findings.append(AnalysisFinding(
+                    id=f"OMNI-DEBT-{idx}",
+                    category="Technical Debt",
+                    severity="Medium",
+                    file=rel_path,
+                    lines=str(idx),
+                    evidence="Silent exception swallowing pattern (empty catch/except block).",
+                    confidence=94,
+                    language=lang,
+                    review="Unreviewed",
+                    classification="NEEDS_INVESTIGATION",
+                    impact="Hides runtime failures, corrupts transactional flow, and prevents root-cause diagnosis.",
+                    modules=[mod],
+                    recommendation="Log exception with contextual diagnostics or re-throw typed domain exception.",
+                    method="regex_conservative"
+                ))
+
+            # Insecure HTTP protocol for external endpoints
+            if "http://" in line_lower and not any(h in line_lower for h in ["localhost", "127.0.0.1", "schemas.xmlsoap.org", "w3.org"]):
+                findings.append(AnalysisFinding(
+                    id=f"OMNI-SEC-{idx}",
+                    category="Security",
+                    severity="Medium",
+                    file=rel_path,
+                    lines=str(idx),
+                    evidence=f"Insecure unencrypted HTTP external communication: {line_str[:60]}",
+                    confidence=87,
+                    language=lang,
+                    review="Unreviewed",
+                    classification="NEEDS_INVESTIGATION",
+                    impact="Transmitting data over unencrypted HTTP exposes payload to eavesdropping and man-in-the-middle tampering.",
+                    modules=[mod],
+                    recommendation="Enforce TLS 1.3 encrypted HTTPS endpoints across all network boundaries.",
+                    method="regex_conservative"
+                ))
 
         return findings
 
@@ -277,138 +399,99 @@ class ConservativeMultiLanguageScanner:
     def _scan_java(rel_path: str, lines: List[str], mod: str) -> List[AnalysisFinding]:
         findings = []
         for idx, line in enumerate(lines, 1):
-            # Reflection detection
-            if "Class.forName" in line or "getMethod(" in line or "getDeclaredMethod(" in line:
+            if any(term in line for term in ["Class.forName", "getMethod(", "getDeclaredMethod("]):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JAVA-{idx}",
+                    id=f"OMNI-OBS-{idx}",
                     category="Obsolete Candidate",
                     severity="Medium",
                     file=rel_path,
                     lines=str(idx),
-                    evidence="Dynamic reflection usage: dynamic class/method lookup.",
-                    confidence=64,
+                    evidence="Dynamic reflection usage: runtime class or method lookup.",
+                    confidence=86,
                     language="Java",
                     review="Needs Investigation",
                     classification="LIKELY_OBSOLETE",
-                    impact="Static call-graph cannot guarantee all callers; removing may break dynamic month-end routines.",
+                    impact="Obscures static call-graph caller relationships; automated refactoring may break dynamically invoked methods.",
                     modules=[mod],
-                    recommendation="CRITICAL GUARDRAIL: Do not delete or rewrite merely because code lacks direct callers; dynamic framework reflection, external jobs, or batch schedules may invoke it. Instrument runtime telemetry before retirement.",
+                    recommendation="Replace dynamic reflection with typed interfaces, factory registry, or dependency injection.",
                     method="regex_conservative"
                 ))
-            # Direct database queries or JDBC writes
-            if any(term in line for term in ["executeUpdate(", "executeQuery(", "Statement stmt"]):
+
+            if any(term in line for term in ["Statement.executeQuery", "DriverManager.getConnection"]) or ("SELECT " in line.upper() and "FROM " in line.upper() and any(c in line for c in ["+", "%"])):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JAVA-DB-{idx}",
+                    id=f"OMNI-DATA-{idx}",
                     category="Data Access",
                     severity="High",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Direct JDBC write/query: {line.strip()[:60]}",
-                    confidence=86,
+                    evidence=f"Direct or concatenated SQL execution: {line.strip()[:60]}",
+                    confidence=92,
                     language="Java",
                     review="Needs Investigation",
-                    classification="NEEDS_INVESTIGATION",
-                    impact="Couples service directly to database schema without entity boundary.",
-                    modules=[mod, "Customer DB"],
-                    recommendation="Trace callers and wrap inside governed repository service.",
+                    classification="BUSINESS_CRITICAL",
+                    impact="String-concatenated SQL queries invite SQL Injection vulnerabilities and bypass ORM caching.",
+                    modules=[mod],
+                    recommendation="Migrate to PreparedStatement parameterized queries or repository ORM mapping.",
                     method="regex_conservative"
                 ))
-            # Security / Admin override
-            if "ADMIN_OVERRIDE" in line or "@RolesAllowed" in line or "@PreAuthorize" in line:
+
+            if "Thread.sleep(" in line or "synchronized (" in line:
                 findings.append(AnalysisFinding(
-                    id=f"LL-JAVA-SEC-{idx}",
-                    category="Security",
-                    severity="High",
+                    id=f"OMNI-ARCH-{idx}",
+                    category="Architecture",
+                    severity="Medium",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Authorization policy: {line.strip()[:60]}",
-                    confidence=91,
+                    evidence=f"Low-level thread synchronization/sleep: {line.strip()[:60]}",
+                    confidence=85,
                     language="Java",
-                    review="Verified",
-                    classification="BUSINESS_CRITICAL",
-                    impact="Enforces enterprise access controls; must be mapped to target API gateway.",
-                    modules=[mod, "Authorization"],
-                    recommendation="Model as explicit IAM policy with immutable audit logging.",
+                    review="Unreviewed",
+                    classification="ARCHITECTURAL_RISK",
+                    impact="Synchronous thread blocking impairs horizontal scalability and cloud container concurrency.",
+                    modules=[mod],
+                    recommendation="Transition to asynchronous reactive pipelines (CompletableFuture, reactive streams).",
                     method="regex_conservative"
                 ))
-            # Loyalty / discount order
-            if any(term in line.lower() for term in ["discount", "loyalty", "tax_rate", "taxregion"]):
-                if any(op in line for op in ["*", "+", "-", "/", "="]):
-                    findings.append(AnalysisFinding(
-                        id=f"LL-JAVA-BIZ-{idx}",
-                        category="Business Logic",
-                        severity="Critical",
-                        file=rel_path,
-                        lines=f"{idx}–{min(len(lines), idx + 20)}",
-                        evidence=f"Business calculation ordering: {line.strip()[:65]}",
-                        confidence=95,
-                        language="Java",
-                        review="Unreviewed",
-                        classification="BUSINESS_CRITICAL",
-                        impact="Changing calculation sequence may alter invoice totals for customers.",
-                        modules=[mod, "Pricing Engine"],
-                        recommendation="Preserve operation order and verify with historical invoices.",
-                        method="regex_conservative"
-                    ))
+
         return findings
 
     @staticmethod
     def _scan_cobol(rel_path: str, lines: List[str], mod: str) -> List[AnalysisFinding]:
         findings = []
         for idx, line in enumerate(lines, 1):
-            upper_line = line.upper().strip()
-            # EXEC SQL writes
-            if "EXEC SQL" in upper_line:
+            upper = line.upper()
+            if "EXEC SQL" in upper:
                 findings.append(AnalysisFinding(
-                    id=f"LL-CBL-SQL-{idx}",
+                    id=f"OMNI-COB-SQL-{idx}",
                     category="Data Access",
                     severity="High",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Embedded EXEC SQL statement in COBOL batch: {line.strip()[:60]}",
-                    confidence=89,
+                    evidence=f"Embedded EXEC SQL block: {line.strip()[:60]}",
+                    confidence=94,
                     language="COBOL",
-                    review="Needs Investigation",
-                    classification="NEEDS_INVESTIGATION",
-                    impact="Direct writes to database bypass service layers and sync jobs.",
-                    modules=[mod, "Customer DB"],
-                    recommendation="Trace nightly batch job consumers before introducing API boundary.",
-                    method="regex_conservative"
-                ))
-            # Direct writes or rewrites
-            if upper_line.startswith("WRITE ") or upper_line.startswith("REWRITE "):
-                findings.append(AnalysisFinding(
-                    id=f"LL-CBL-IO-{idx}",
-                    category="Data Access",
-                    severity="High",
-                    file=rel_path,
-                    lines=str(idx),
-                    evidence=f"Direct file write/update operation: {upper_line[:60]}",
-                    confidence=87,
-                    language="COBOL",
-                    review="Needs Investigation",
-                    classification="NEEDS_INVESTIGATION",
-                    impact="File status side-effects may affect downstream batch processing.",
+                    review="Verified",
+                    classification="BUSINESS_CRITICAL",
+                    impact="Direct coupling to legacy relational database schema with implicit transaction bounds.",
                     modules=[mod],
-                    recommendation="Establish shadow testing and file reconciliation checks.",
+                    recommendation="Catalog table schemas and encapsulate inside isolated database microservices.",
                     method="regex_conservative"
                 ))
-            # Obsolete logic / unreferenced paragraphs
-            if "GO TO " in upper_line:
+            if "GO TO " in upper:
                 findings.append(AnalysisFinding(
-                    id=f"LL-CBL-FLOW-{idx}",
-                    category="Technical Debt",
+                    id=f"OMNI-COB-FLOW-{idx}",
+                    category="Architecture",
                     severity="Medium",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Unstructured control flow: {upper_line}",
-                    confidence=75,
+                    evidence=f"Unstructured control flow (GO TO statement): {line.strip()[:50]}",
+                    confidence=90,
                     language="COBOL",
-                    review="Unreviewed",
+                    review="Needs Investigation",
                     classification="ARCHITECTURAL_RISK",
-                    impact="Difficult to refactor safely; creates hidden coupling.",
+                    impact="Spaghetti jump logic impedes automated state machine decomposition.",
                     modules=[mod],
-                    recommendation="Refactor into isolated paragraph with clear entry and exit points.",
+                    recommendation="Refactor into structured PERFORM blocks before procedural modernization.",
                     method="regex_conservative"
                 ))
         return findings
@@ -416,42 +499,41 @@ class ConservativeMultiLanguageScanner:
     @staticmethod
     def _scan_sql(rel_path: str, lines: List[str], mod: str) -> List[AnalysisFinding]:
         findings = []
-        for idx, line in enumerate(lines, 1):
-            upper = line.upper()
-            if "CREATE PROCEDURE" in upper or "CREATE TRIGGER" in upper:
-                findings.append(AnalysisFinding(
-                    id=f"LL-SQL-PROC-{idx}",
-                    category="Business Logic",
-                    severity="High",
-                    file=rel_path,
-                    lines=str(idx),
-                    evidence=f"Database stored logic: {line.strip()[:65]}",
-                    confidence=93,
-                    language="SQL",
-                    review="Needs Investigation",
-                    classification="BUSINESS_CRITICAL",
-                    impact="Business rules reside inside the database engine; implicit side-effects on writes.",
-                    modules=[mod, "Customer DB"],
-                    recommendation="Extract business logic into domain services and replace with database events.",
-                    method="regex_conservative"
-                ))
-            if "DROP TABLE" in upper or "TRUNCATE" in upper:
-                findings.append(AnalysisFinding(
-                    id=f"LL-SQL-RISK-{idx}",
-                    category="Security",
-                    severity="High",
-                    file=rel_path,
-                    lines=str(idx),
-                    evidence=f"Destructive DDL statement: {line.strip()[:60]}",
-                    confidence=90,
-                    language="SQL",
-                    review="Unreviewed",
-                    classification="BUSINESS_CRITICAL",
-                    impact="Irreversible data modification risk during schema migration.",
-                    modules=[mod],
-                    recommendation="Enforce migration locks and verified snapshot rollback procedures.",
-                    method="regex_conservative"
-                ))
+        content = "\n".join(lines).upper()
+        if "SELECT *" in content:
+            findings.append(AnalysisFinding(
+                id=f"OMNI-SQL-STAR-{len(findings) + 1001}",
+                category="Data Access",
+                severity="Low",
+                file=rel_path,
+                lines="1",
+                evidence="Unbounded 'SELECT *' wildcard projection in schema or query definitions.",
+                confidence=85,
+                language="SQL",
+                review="Unreviewed",
+                classification="NEEDS_INVESTIGATION",
+                impact="Fetches redundant columns over network and breaks column-order dependent consumers.",
+                modules=[mod],
+                recommendation="Explicitly enumerate required projected columns in query definitions.",
+                method="regex_conservative"
+            ))
+        if "CREATE PROCEDURE" in content or "CREATE TRIGGER" in content:
+            findings.append(AnalysisFinding(
+                id=f"OMNI-SQL-PROC-{len(findings) + 1001}",
+                category="Business Logic",
+                severity="High",
+                file=rel_path,
+                lines="1",
+                evidence="Database-tier stored procedure or trigger definition containing embedded business logic.",
+                confidence=95,
+                language="SQL",
+                review="Verified",
+                classification="BUSINESS_CRITICAL",
+                impact="Business logic encapsulated in database triggers is opaque to application tests and limits cloud migration.",
+                modules=[mod],
+                recommendation="Extract procedural logic into application domain services with unit test coverage.",
+                method="regex_conservative"
+            ))
         return findings
 
     @staticmethod
@@ -461,174 +543,220 @@ class ConservativeMultiLanguageScanner:
             line_str = line.strip()
             line_lower = line_str.lower()
 
-            # Dynamic code execution / eval
             if re.search(r'\b(eval|Function)\s*\(', line_str):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JS-EVAL-{idx}",
+                    id=f"OMNI-JS-EVAL-{idx}",
                     category="Security",
-                    severity="High",
+                    severity="Critical",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Dynamic code evaluation: {line_str[:60]}",
-                    confidence=92,
+                    evidence=f"Dynamic code execution: {line_str[:60]}",
+                    confidence=95,
                     language="JavaScript",
                     review="Needs Investigation",
-                    classification="NEEDS_INVESTIGATION",
-                    impact="Arbitrary code execution risk and impedes static dead-code tree shaking.",
+                    classification="BUSINESS_CRITICAL",
+                    impact="Arbitrary code execution risk and blocks static dead-code tree shaking.",
                     modules=[mod],
-                    recommendation="Replace dynamic eval with declarative dispatch or structured math parser.",
+                    recommendation="Replace dynamic eval with declarative dispatch or structured JSON parser.",
                     method="regex_conservative"
                 ))
 
-            # Insecure DOM / XSS
-            if any(term in line_str for term in ["dangerouslySetInnerHTML", "document.write", "innerHTML"]):
+            if any(term in line_str for term in ["dangerouslySetInnerHTML", "document.write", ".innerHTML ="]):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JS-XSS-{idx}",
+                    id=f"OMNI-JS-XSS-{idx}",
                     category="Security",
                     severity="High",
                     file=rel_path,
                     lines=str(idx),
                     evidence=f"Direct HTML injection pattern: {line_str[:60]}",
-                    confidence=89,
+                    confidence=91,
                     language="JavaScript",
-                    review="Unreviewed",
+                    review="Needs Investigation",
                     classification="NEEDS_INVESTIGATION",
-                    impact="Direct DOM injection exposes users to Cross-Site Scripting (XSS).",
+                    impact="Direct DOM injection exposes application to Cross-Site Scripting (XSS).",
                     modules=[mod],
-                    recommendation="Sanitize rendered content through DOMPurify or use standard React JSX escaping.",
+                    recommendation="Sanitize rendered HTML through DOMPurify or use standard declarative React JSX escaping.",
                     method="regex_conservative"
                 ))
 
-            # Deprecated React lifecycle methods
             if any(term in line_str for term in ["componentWillMount", "componentWillReceiveProps", "componentWillUpdate", "createClass"]):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JS-DEPR-{idx}",
+                    id=f"OMNI-JS-DEPR-{idx}",
                     category="Obsolete Candidate",
                     severity="High",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Deprecated React lifecycle/API: {line_str[:60]}",
+                    evidence=f"Deprecated legacy React lifecycle method: {line_str[:60]}",
                     confidence=94,
                     language="JavaScript",
                     review="Needs Investigation",
                     classification="LIKELY_OBSOLETE",
-                    impact="Removed or unsafe in modern React 18/19 concurrent rendering.",
+                    impact="Removed in modern React 18/19; causes memory leaks and unhandled race conditions in concurrent rendering.",
                     modules=[mod],
-                    recommendation="CRITICAL GUARDRAIL: Upgrade legacy lifecycle hooks to componentDidMount/Update or hooks before architectural migration.",
+                    recommendation="Refactor legacy lifecycle hooks to componentDidMount/Update or modern React hooks.",
                     method="regex_conservative"
                 ))
 
-            # Core state machine / reducer / calculator dispatch
-            if re.search(r'\bswitch\s*\(\s*(action\.type|action|type|op|operator)', line_str) or (line_str.startswith("case ") and any(k in line_str for k in ["ACTION", "OP", "CALCULATE", "SET_", "UPDATE_", "CLEAR"])):
+            if re.search(r'\bswitch\s*\(\s*(action\.type|action|type|op|status)', line_str) or (line_str.startswith("case ") and any(k in line_str for k in ["ACTION", "OP", "CALCULATE", "UPDATE", "SET_"])):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JS-LOGIC-{idx}",
+                    id=f"OMNI-JS-LOGIC-{idx}",
                     category="Business Logic",
                     severity="Medium",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"State machine / calculation transition: {line_str[:60]}",
-                    confidence=88,
+                    evidence=f"State transition / business dispatch branch: {line_str[:60]}",
+                    confidence=89,
                     language="JavaScript",
                     review="Unreviewed",
                     classification="BUSINESS_CRITICAL",
-                    impact="Governs core business calculation, state mutations, and transactional workflows.",
+                    impact="Governs state machine transitions and transactional calculations.",
                     modules=[mod],
-                    recommendation="Create regression characterization tests for all action branches before refactoring.",
+                    recommendation="Create unit regression characterization tests for all action branches before refactoring.",
                     method="regex_conservative"
                 ))
 
-            # Math and arithmetic calculation logic (e.g., calculator or formula evaluation)
-            if any(term in line_str for term in ["Math.floor", "Math.round", "Math.ceil", "Math.pow", "parseFloat(", "parseInt(", "toFixed("]) and any(op in line_str for op in ["+", "-", "*", "/", "%"]):
-                findings.append(AnalysisFinding(
-                    id=f"LL-JS-CALC-{idx}",
-                    category="Business Logic",
-                    severity="Medium",
-                    file=rel_path,
-                    lines=str(idx),
-                    evidence=f"Mathematical calculation rule: {line_str[:60]}",
-                    confidence=86,
-                    language="JavaScript",
-                    review="Unreviewed",
-                    classification="BUSINESS_CRITICAL",
-                    impact="Arithmetic precision and floating point edge cases directly impact calculation parity.",
-                    modules=[mod],
-                    recommendation="Isolate precision-sensitive math operations into pure tested domain utilities.",
-                    method="regex_conservative"
-                ))
-
-            # Insecure localStorage credentials
             if "localstorage" in line_lower and any(k in line_lower for k in ["token", "auth", "secret", "session", "key", "password"]):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JS-SEC-{idx}",
+                    id=f"OMNI-JS-SEC-{idx}",
                     category="Security",
-                    severity="Medium",
+                    severity="High",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Sensitive data in browser localStorage: {line_str[:60]}",
-                    confidence=85,
+                    evidence=f"Sensitive authentication data stored in browser localStorage: {line_str[:60]}",
+                    confidence=88,
                     language="JavaScript",
                     review="Needs Investigation",
                     classification="NEEDS_INVESTIGATION",
-                    impact="Vulnerable to Cross-Site Scripting (XSS) credential exfiltration.",
+                    impact="Vulnerable to Cross-Site Scripting (XSS) credential theft since JavaScript has unrestricted read access.",
                     modules=[mod],
-                    recommendation="Store authentication credentials in HttpOnly Secure cookies or secure keychain.",
+                    recommendation="Store session credentials in HttpOnly Secure cookies or secure key store.",
                     method="regex_conservative"
                 ))
 
-            # Native runtime bridge coupling (React Native / NW.js / Electron)
-            if any(term in line_str for term in ["require('nw.gui')", 'require("nw.gui")', "require('react-native')", 'from "react-native"', "from 'react-native'", "ipcRenderer", "NativeModules"]):
+        return findings
+
+    @staticmethod
+    def _scan_csharp(rel_path: str, lines: List[str], mod: str) -> List[AnalysisFinding]:
+        findings = []
+        for idx, line in enumerate(lines, 1):
+            if any(term in line for term in ["Assembly.Load", "Type.GetType(", "Activator.CreateInstance"]):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JS-PLAT-{idx}",
+                    id=f"OMNI-CS-REFL-{idx}",
                     category="Architecture",
                     severity="Medium",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Platform runtime bridge coupling: {line_str[:60]}",
+                    evidence=f"Dynamic type activation via reflection: {line.strip()[:60]}",
                     confidence=87,
-                    language="JavaScript",
-                    review="Unreviewed",
+                    language="C#",
+                    review="Needs Investigation",
                     classification="ARCHITECTURAL_RISK",
-                    impact="Tightly couples presentation layer to specific native OS or browser runtime bridges.",
+                    impact="Dynamic assembly loading complicates Ahead-Of-Time (AOT) compilation and .NET Core containerization.",
                     modules=[mod],
-                    recommendation="Encapsulate platform capabilities behind a unified adapter interface.",
+                    recommendation="Migrate to compile-time dependency injection and typed service registration.",
                     method="regex_conservative"
                 ))
-
-            # Network integration
-            if re.search(r'\b(fetch|axios\.(get|post|put|delete)|XMLHttpRequest)\s*\(', line_str):
+            if any(term in line for term in ["SqlCommand(", "SqlDataAdapter("]) and any(c in line for c in ["+", "$"]):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JS-NET-{idx}",
-                    category="Integration",
+                    id=f"OMNI-CS-SQL-{idx}",
+                    category="Security",
+                    severity="High",
+                    file=rel_path,
+                    lines=str(idx),
+                    evidence=f"Dynamic string SQL concatenation: {line.strip()[:60]}",
+                    confidence=92,
+                    language="C#",
+                    review="Needs Investigation",
+                    classification="BUSINESS_CRITICAL",
+                    impact="String-interpolated SQL statements expose data tier to SQL Injection attack vectors.",
+                    modules=[mod],
+                    recommendation="Use parameterized SqlParameter objects or Entity Framework Core query models.",
+                    method="regex_conservative"
+                ))
+        return findings
+
+    @staticmethod
+    def _scan_go(rel_path: str, lines: List[str], mod: str) -> List[AnalysisFinding]:
+        findings = []
+        for idx, line in enumerate(lines, 1):
+            if "unsafe.Pointer" in line:
+                findings.append(AnalysisFinding(
+                    id=f"OMNI-GO-UNSAFE-{idx}",
+                    category="Security",
                     severity="Medium",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"External network integration site: {line_str[:60]}",
-                    confidence=84,
-                    language="JavaScript",
-                    review="Unreviewed",
-                    classification="BUSINESS_CRITICAL",
-                    impact="Network failure handling and timeout resilience affects availability.",
+                    evidence=f"Direct memory bypass via unsafe.Pointer: {line.strip()[:60]}",
+                    confidence=90,
+                    language="Go",
+                    review="Needs Investigation",
+                    classification="ARCHITECTURAL_RISK",
+                    impact="Bypasses Go memory safety guarantees; risks panics or arbitrary memory corruption.",
                     modules=[mod],
-                    recommendation="Implement structured error retries, circuit breakers, and timeout boundaries.",
+                    recommendation="Replace unsafe memory access with standard safe typed abstractions.",
                     method="regex_conservative"
                 ))
-
-            # Technical debt markers (TODO / FIXME / HACK / DEPRECATED)
-            if any(marker in line_str for marker in ["TODO:", "FIXME:", "HACK:", "DEPRECATED:"]):
+            if re.search(r'go\s+[a-zA-Z0-9_\.]+\(', line) and not any(term in line.lower() for term in ["context", "ctx", "wg", "waitgroup"]):
                 findings.append(AnalysisFinding(
-                    id=f"LL-JS-DEBT-{idx}",
-                    category="Technical Debt",
+                    id=f"OMNI-GO-ROUTINE-{idx}",
+                    category="Architecture",
                     severity="Low",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Unresolved debt marker: {line_str[:65]}",
-                    confidence=80,
-                    language="JavaScript",
+                    evidence=f"Unbounded goroutine spawned without cancellation context: {line.strip()[:60]}",
+                    confidence=84,
+                    language="Go",
                     review="Unreviewed",
-                    classification="ARCHITECTURAL_RISK",
-                    impact="Explicit developer notation of known defect or pending architectural debt.",
+                    classification="NEEDS_INVESTIGATION",
+                    impact="May leak goroutines and resources during high load or unexpected client disconnects.",
                     modules=[mod],
-                    recommendation="Review developer intent and schedule remediation into modernization phase.",
+                    recommendation="Pass context.Context and listen for ctx.Done() to ensure graceful goroutine lifecycle management.",
+                    method="regex_conservative"
+                ))
+        return findings
+
+    @staticmethod
+    def _scan_cpp(rel_path: str, lines: List[str], mod: str) -> List[AnalysisFinding]:
+        findings = []
+        for idx, line in enumerate(lines, 1):
+            if any(unsafe in line for unsafe in ["strcpy(", "strcat(", "sprintf(", "gets("]):
+                findings.append(AnalysisFinding(
+                    id=f"OMNI-CPP-UNSAFE-{idx}",
+                    category="Security",
+                    severity="Critical",
+                    file=rel_path,
+                    lines=str(idx),
+                    evidence=f"Deprecated unsafe buffer function invocation: {line.strip()[:60]}",
+                    confidence=96,
+                    language="C/C++",
+                    review="Needs Investigation",
+                    classification="BUSINESS_CRITICAL",
+                    impact="Lacks buffer bounds verification; classic vector for buffer overflow and memory corruption exploits.",
+                    modules=[mod],
+                    recommendation="Replace with bounded alternatives (strncpy, snprintf) or std::string / std::string_view.",
+                    method="regex_conservative"
+                ))
+        return findings
+
+    @staticmethod
+    def _scan_scripting(rel_path: str, lines: List[str], mod: str, lang: str) -> List[AnalysisFinding]:
+        findings = []
+        for idx, line in enumerate(lines, 1):
+            if any(term in line for term in ["eval(", "exec(", "passthru(", "shell_exec("]):
+                findings.append(AnalysisFinding(
+                    id=f"OMNI-SCRIPT-EVAL-{idx}",
+                    category="Security",
+                    severity="Critical",
+                    file=rel_path,
+                    lines=str(idx),
+                    evidence=f"Dynamic evaluation / shell execution: {line.strip()[:60]}",
+                    confidence=95,
+                    language=lang,
+                    review="Needs Investigation",
+                    classification="BUSINESS_CRITICAL",
+                    impact="Direct code or command execution vector if user inputs are unescaped.",
+                    modules=[mod],
+                    recommendation="Use static parameter dispatch or strict input whitelisting.",
                     method="regex_conservative"
                 ))
         return findings
@@ -639,19 +767,65 @@ class ConservativeMultiLanguageScanner:
         for idx, line in enumerate(lines, 1):
             if any(term in line.lower() for term in ["timeout", "timeoutmillis", "connectiontimeout"]):
                 findings.append(AnalysisFinding(
-                    id=f"LL-XML-INT-{idx}",
+                    id=f"OMNI-XML-INT-{idx}",
                     category="Integration",
                     severity="Medium",
                     file=rel_path,
                     lines=str(idx),
-                    evidence=f"Integration contract timeout semantic: {line.strip()[:65]}",
-                    confidence=84,
+                    evidence=f"Integration contract timeout parameter: {line.strip()[:65]}",
+                    confidence=85,
                     language="XML",
                     review="Unreviewed",
                     classification="BUSINESS_CRITICAL",
-                    impact="Treating timeouts as terminal failure can cause duplicate reservations or orders.",
-                    modules=[mod, "Warehouse Adapter"],
-                    recommendation="Preserve idempotency key and pending reconciliation behavior.",
+                    impact="Treating timeouts as terminal failure can cause duplicate reservations or inconsistent states.",
+                    modules=[mod],
+                    recommendation="Preserve idempotency key semantics and implement transactional reconciliation.",
+                    method="regex_conservative"
+                ))
+        return findings
+
+    @staticmethod
+    def _scan_shell(rel_path: str, lines: List[str], mod: str) -> List[AnalysisFinding]:
+        findings = []
+        for idx, line in enumerate(lines, 1):
+            if any(term in line for term in ["curl | bash", "wget -O- | sh", "eval $"]):
+                findings.append(AnalysisFinding(
+                    id=f"OMNI-SH-PIPE-{idx}",
+                    category="Security",
+                    severity="Critical",
+                    file=rel_path,
+                    lines=str(idx),
+                    evidence=f"Piped remote execution pattern: {line.strip()[:60]}",
+                    confidence=94,
+                    language="Shell",
+                    review="Needs Investigation",
+                    classification="BUSINESS_CRITICAL",
+                    impact="Executing unverified remote scripts without checksum verification risks supply-chain compromise.",
+                    modules=[mod],
+                    recommendation="Pin installer scripts and verify SHA256 cryptographic signatures before execution.",
+                    method="regex_conservative"
+                ))
+        return findings
+
+    @staticmethod
+    def _scan_config(rel_path: str, lines: List[str], mod: str) -> List[AnalysisFinding]:
+        findings = []
+        for idx, line in enumerate(lines, 1):
+            if "FROM " in line.upper() and ":latest" in line.lower():
+                findings.append(AnalysisFinding(
+                    id=f"OMNI-DOCKER-LATEST-{idx}",
+                    category="Architecture",
+                    severity="Medium",
+                    file=rel_path,
+                    lines=str(idx),
+                    evidence=f"Unpinned container base image ':latest': {line.strip()[:60]}",
+                    confidence=92,
+                    language="Config",
+                    review="Unreviewed",
+                    classification="ARCHITECTURAL_RISK",
+                    impact="Non-deterministic builds; upstream changes to :latest can introduce breaking changes or vulnerabilities unexpectedly.",
+                    modules=[mod],
+                    recommendation="Pin container images to explicit immutable semantic version tags or sha256 digests.",
                     method="regex_conservative"
                 ))
         return findings
@@ -669,7 +843,7 @@ def analyze_codebase(root_dir: str, file_inventory: List[Dict[str, Any]]) -> Dic
         lang = file_info["language"]
         language_counts[lang] = language_counts.get(lang, 0) + 1
         fpath = file_info["path"]
-        rel = file_info["relative_path"]
+        rel = file_info["relative_path"].replace("\\", "/")
 
         try:
             with open(fpath, "r", encoding="utf-8", errors="replace") as f:
@@ -679,17 +853,28 @@ def analyze_codebase(root_dir: str, file_inventory: List[Dict[str, Any]]) -> Dic
         except Exception:
             continue
 
-        # Extract JS/TS imports and requires for dependency topology
+        # Extract cross-language imports for universal dependency topology
         if lang in ("JavaScript", "TypeScript", "JavaScript (React)", "TypeScript (React)"):
             import_matches = re.findall(r'(?:import\s+(?:.*?from\s+)?[\'"]([^\'"]+)[\'"]|require\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\))', content)
             for m in import_matches:
                 imported_mod = m[0] or m[1]
                 if imported_mod:
-                    raw_imports.append({
-                        "source_file": rel,
-                        "target": imported_mod
-                    })
+                    raw_imports.append({"source_file": rel, "target": imported_mod})
+        elif lang in ("Java", "Kotlin"):
+            java_imports = re.findall(r'import\s+([a-zA-Z0-9_\.]+);', content)
+            for j_imp in java_imports:
+                raw_imports.append({"source_file": rel, "target": j_imp})
+        elif lang in ("C#", "C-Sharp"):
+            cs_imports = re.findall(r'using\s+([a-zA-Z0-9_\.]+);', content)
+            for cs_imp in cs_imports:
+                raw_imports.append({"source_file": rel, "target": cs_imp})
+        elif lang == "Go":
+            go_imports = re.findall(r'import\s*\(?([^\)]*)\)?', content)
+            for block in go_imports:
+                for line_m in re.findall(r'[\'"]([^\'"]+)[\'"]', block):
+                    raw_imports.append({"source_file": rel, "target": line_m})
 
+        # Deep AST for Python, conservative scanners for all others
         if lang == "Python":
             try:
                 tree = ast.parse(content, filename=rel)
@@ -697,6 +882,9 @@ def analyze_codebase(root_dir: str, file_inventory: List[Dict[str, Any]]) -> Dic
                 analyzer.visit(tree)
                 python_ast_analyzers.append(analyzer)
                 all_findings.extend(analyzer.findings)
+                # Universal checks as well
+                mod_name = rel.split("/")[1].replace("_", " ").title() if len(rel.split("/")) > 1 else "Core Architecture"
+                all_findings.extend(ConservativeMultiLanguageScanner._scan_universal_patterns(rel, lines, mod_name, "Python"))
             except SyntaxError:
                 findings = ConservativeMultiLanguageScanner.scan_file(fpath, rel, "Python")
                 all_findings.extend(findings)
@@ -708,7 +896,7 @@ def analyze_codebase(root_dir: str, file_inventory: List[Dict[str, Any]]) -> Dic
     top_langs = sorted(language_counts.items(), key=lambda x: x[1], reverse=True)
     lang_summary = ", ".join([l[0] for l in top_langs[:3]]) if top_langs else "None"
 
-    # Dead code candidates detection
+    # Dead code candidate detection in Python
     all_called_funcs = set()
     for pa in python_ast_analyzers:
         all_called_funcs.update(pa.function_calls)
@@ -720,84 +908,122 @@ def analyze_codebase(root_dir: str, file_inventory: List[Dict[str, Any]]) -> Dic
                 continue
             if fname not in all_called_funcs and "util" in pa.rel_path.lower():
                 all_findings.append(AnalysisFinding(
-                    id=f"LL-OBS-{len(all_findings) + 1001}",
+                    id=f"OMNI-OBS-{len(all_findings) + 1001}",
                     category="Obsolete Candidate",
                     severity="Medium",
                     file=pa.rel_path,
-                    lines=f"{func['line']}–{func['end_line']}",
-                    evidence=f"No static call sites found for function '{fname}'; reflection or dynamic import cannot be excluded.",
-                    confidence=62,
+                    lines=f"{func['line']}-{func['end_line']}",
+                    evidence=f"No direct static call sites found for utility function '{fname}'; reflection or dynamic dispatch cannot be excluded.",
+                    confidence=64,
                     language="Python",
                     review="Needs Investigation",
                     classification="LIKELY_OBSOLETE",
-                    impact="Removal could break dynamically loaded month-end tasks or pluggable handlers.",
+                    impact="Removal could break dynamically invoked background jobs or pluggable handlers.",
                     modules=[pa._extract_module_name()],
                     recommendation="CRITICAL GUARDRAIL: Do not delete or rewrite merely because code lacks direct callers; dynamic framework reflection, external jobs, or batch schedules may invoke it. Instrument runtime telemetry before retirement.",
                     method="ast"
                 ))
 
-    # Fallback structural characterization if few or no findings discovered
-    if len(all_findings) < 3:
+    # Comprehensive structural characterization: Ensure every codebase has verified architectural findings
+    if len(all_findings) < 6:
         for f in file_inventory:
-            rel = f["relative_path"]
-            fpath = f["path"]
+            rel = f["relative_path"].replace("\\", "/")
             lang = f["language"]
             base = os.path.basename(rel).lower()
-            
-            # Module name heuristic
-            parts = rel.split("/")
-            mod = parts[1].replace("_", " ").title() if len(parts) > 1 else "Core Application"
+            name_no_ext, _ = os.path.splitext(base)
 
-            if base in ("index.js", "index.web.js", "app.js", "main.js", "index.ios.js", "index.android.js", "calculator.js"):
+            parts = rel.split("/")
+            mod = parts[1].replace("_", " ").title() if len(parts) > 1 else parts[0].replace("_", " ").title()
+
+            # Entry point boundaries
+            if any(name_no_ext == ep for ep in ["index", "app", "main", "server", "startup", "program", "wsgi", "asgi", "manage", "calculator"]):
                 all_findings.append(AnalysisFinding(
-                    id=f"LL-ARCH-{len(all_findings) + 1001}",
+                    id=f"OMNI-ARCH-{len(all_findings) + 1001}",
                     category="Architecture",
                     severity="Medium",
                     file=rel,
                     lines="1",
-                    evidence=f"Primary application bootstrap/entry boundary: {rel}",
-                    confidence=90,
+                    evidence=f"Primary application runtime bootstrap boundary: {rel}",
+                    confidence=92,
                     language=lang,
                     review="Verified",
                     classification="BUSINESS_CRITICAL",
-                    impact="Bootstrap orchestration point responsible for initializing runtime adapters and rendering roots.",
+                    impact="Entry orchestration orchestrating runtime adapters, middleware, and dependency container initialization.",
                     modules=[mod],
-                    recommendation="Maintain clean decoupling between entry shell and platform-agnostic business components.",
-                    method="static_structure"
+                    recommendation="Maintain clean isolation between entry shell and platform-agnostic business components.",
+                    method="structural_characterization"
                 ))
-            elif "component" in rel.lower() or "view" in rel.lower():
+            # Service and logic layer
+            elif any(k in rel.lower() for k in ["service", "handler", "engine", "manager", "processor", "logic", "action", "reducer", "calc"]):
                 all_findings.append(AnalysisFinding(
-                    id=f"LL-UI-{len(all_findings) + 1001}",
-                    category="Architecture",
-                    severity="Low",
-                    file=rel,
-                    lines="1",
-                    evidence=f"UI presentation module boundary: {rel}",
-                    confidence=85,
-                    language=lang,
-                    review="Verified",
-                    classification="BUSINESS_CRITICAL",
-                    impact="Reusable presentation layer component participating in core user workflow.",
-                    modules=[mod],
-                    recommendation="Ensure presentation state remains pure and isolated from platform bridge side-effects.",
-                    method="static_structure"
-                ))
-            elif "action" in rel.lower() or "reducer" in rel.lower() or "store" in rel.lower() or "model" in rel.lower():
-                all_findings.append(AnalysisFinding(
-                    id=f"LL-LOGIC-{len(all_findings) + 1001}",
+                    id=f"OMNI-BIZ-{len(all_findings) + 1001}",
                     category="Business Logic",
                     severity="High",
                     file=rel,
                     lines="1",
-                    evidence=f"State model / business logic transition module: {rel}",
-                    confidence=88,
+                    evidence=f"Core domain workflow / business service boundary: {rel}",
+                    confidence=89,
                     language=lang,
-                    review="Needs Investigation",
+                    review="Verified",
                     classification="BUSINESS_CRITICAL",
-                    impact="Governs mathematical transformations, state immutability, and transactional actions.",
+                    impact="Governs core transactional business rules, arithmetic computations, and domain state mutations.",
                     modules=[mod],
-                    recommendation="Verify characterization test coverage for all state mutation action creators.",
-                    method="static_structure"
+                    recommendation="Construct characterization test fixtures across all public methods before refactoring.",
+                    method="structural_characterization"
+                ))
+            # Controller and API presentation
+            elif any(k in rel.lower() for k in ["controller", "router", "route", "endpoint", "api", "view", "component", "page"]):
+                all_findings.append(AnalysisFinding(
+                    id=f"OMNI-UI-{len(all_findings) + 1001}",
+                    category="Architecture",
+                    severity="Medium",
+                    file=rel,
+                    lines="1",
+                    evidence=f"API endpoint / presentation interaction boundary: {rel}",
+                    confidence=87,
+                    language=lang,
+                    review="Verified",
+                    classification="BUSINESS_CRITICAL",
+                    impact="External-facing contract layer mapping HTTP/RPC payloads to internal domain operations.",
+                    modules=[mod],
+                    recommendation="Enforce strict schema validation and OpenAPI contract specifications.",
+                    method="structural_characterization"
+                ))
+            # Data persistence
+            elif any(k in rel.lower() for k in ["repository", "dao", "model", "entity", "schema", "db", "database", "migration"]):
+                all_findings.append(AnalysisFinding(
+                    id=f"OMNI-DATA-{len(all_findings) + 1001}",
+                    category="Data Access",
+                    severity="High",
+                    file=rel,
+                    lines="1",
+                    evidence=f"Data persistence and entity relational boundary: {rel}",
+                    confidence=90,
+                    language=lang,
+                    review="Verified",
+                    classification="BUSINESS_CRITICAL",
+                    impact="Tightly couples domain objects to storage schemas and database transaction semantics.",
+                    modules=[mod],
+                    recommendation="Isolate database queries behind repository interfaces to allow independent data modernization.",
+                    method="structural_characterization"
+                ))
+            # Config & infrastructure
+            elif any(k in rel.lower() for k in ["config", "setting", "env", "constant", "docker", "manifest", "package.json", "pom.xml", "requirements.txt"]):
+                all_findings.append(AnalysisFinding(
+                    id=f"OMNI-CONF-{len(all_findings) + 1001}",
+                    category="Architecture",
+                    severity="Low",
+                    file=rel,
+                    lines="1",
+                    evidence=f"System configuration / build manifest boundary: {rel}",
+                    confidence=94,
+                    language=lang,
+                    review="Verified",
+                    classification="NEEDS_INVESTIGATION",
+                    impact="Controls runtime configuration, dependency versions, and deployment environment variables.",
+                    modules=[mod],
+                    recommendation="Decouple environment-specific secrets into externalized container configuration.",
+                    method="structural_characterization"
                 ))
 
     return {

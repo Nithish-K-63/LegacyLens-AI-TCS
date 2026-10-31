@@ -1,5 +1,6 @@
 """Business rule discovery and preservation engine."""
 import re
+import os
 from typing import List, Dict, Any
 from backend.schemas.models import BusinessRule
 
@@ -9,16 +10,16 @@ def extract_business_rules(file_inventory: List[Dict[str, Any]], static_results:
     rules: List[BusinessRule] = []
     rule_idx = 1
 
-    # Extract rules from static findings
+    # 1. Extract rules from static findings
     findings = static_results.get("findings", [])
     for f in findings:
-        if f.category in ("Business Logic", "Architecture") or "RULE" in f.id or "AUTH" in f.id or "INT" in f.id or "LOGIC" in f.id or "CALC" in f.id:
-            category = "Discounts" if "discount" in f.evidence.lower() or "loyalty" in f.evidence.lower() else \
-                       "Calculations" if "calc" in f.evidence.lower() or "math" in f.evidence.lower() else \
-                       "State Flow" if "state" in f.evidence.lower() or "action" in f.evidence.lower() else \
-                       "Eligibility" if "override" in f.evidence.lower() or "hold" in f.evidence.lower() else \
-                       "Transactions" if "timeout" in f.evidence.lower() or "reservation" in f.evidence.lower() else \
-                       "Validation" if "valid" in f.evidence.lower() or "format" in f.evidence.lower() else "Security"
+        if f.category in ("Business Logic", "Architecture", "Security", "Data Access") or any(k in f.id for k in ["RULE", "AUTH", "INT", "LOGIC", "CALC", "BIZ"]):
+            category = "Discounts" if any(k in f.evidence.lower() for k in ["discount", "loyalty"]) else \
+                       "Calculations" if any(k in f.evidence.lower() for k in ["calc", "math", "precision", "arithmetic"]) else \
+                       "State Flow" if any(k in f.evidence.lower() for k in ["state", "action", "transition", "status"]) else \
+                       "Eligibility" if any(k in f.evidence.lower() for k in ["override", "hold", "privilege"]) else \
+                       "Transactions" if any(k in f.evidence.lower() for k in ["timeout", "reservation", "lock", "transaction"]) else \
+                       "Validation" if any(k in f.evidence.lower() for k in ["valid", "format", "schema", "verify"]) else "Security Boundary"
 
             b_rule = BusinessRule(
                 id=f"BR-{rule_idx:03d}",
@@ -32,10 +33,10 @@ def extract_business_rules(file_inventory: List[Dict[str, Any]], static_results:
                 critical=f.severity in ("Critical", "High"),
                 dependencies=f.modules if f.modules else ["Core Service"],
                 tests=_derive_tests(f.evidence, category),
-                classification="Candidate for retirement — pending verification" if "OBS" in f.id or "obsolete" in f.category.lower() else \
+                classification="Candidate for retirement – pending verification" if "OBS" in f.id or "obsolete" in f.category.lower() else \
                                "Confirmed in source" if f.confidence >= 90 else \
                                "Strongly inferred" if f.confidence >= 75 else \
-                               "Uncertain — requires human verification",
+                               "Uncertain – requires human verification",
                 inputs=["Customer tier", "Order payload", "Transaction Context"] if "discount" in f.evidence.lower() else ["Input operand", "Operator state", "Memory stack"] if "calc" in f.evidence.lower() else ["User Token", "Role Context", "Audit Reason"],
                 conditions=[f.evidence],
                 outputs=["Calculated line item discount", "Approval status"] if "discount" in f.evidence.lower() else ["Evaluated arithmetic result", "State buffer"] if "calc" in f.evidence.lower() else ["Authorization decision", "Audit event log"],
@@ -43,8 +44,46 @@ def extract_business_rules(file_inventory: List[Dict[str, Any]], static_results:
             )
             rules.append(b_rule)
             rule_idx += 1
+            if len(rules) >= 12:
+                break
 
-    # Also inspect codebase directly for discount, tax, or threshold conditions if none found
+    # 2. If still few rules discovered, scan source files for business conditionals
+    if len(rules) < 3 and file_inventory:
+        for f in file_inventory:
+            rel = f["relative_path"].replace("\\", "/")
+            fpath = f["path"]
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as sf:
+                    for line_no, line in enumerate(sf.readlines(), 1):
+                        line_str = line.strip()
+                        if any(term in line_str.lower() for term in ["if (tier", "if (amount", "if (price", "if (status", "if (role", "switch ("]):
+                            rules.append(BusinessRule(
+                                id=f"BR-{rule_idx:03d}",
+                                name=f"Conditional Rule in {os.path.basename(rel)}",
+                                category="State Flow",
+                                description=f"Execution branch governed by conditional: {line_str[:60]}",
+                                source=f"{rel}:{line_no}",
+                                confidence=85,
+                                impact="Medium",
+                                review="Unreviewed",
+                                critical=False,
+                                dependencies=[rel.split("/")[0]],
+                                tests=["Boundary evaluation test", "Branch negation test"],
+                                classification="Strongly inferred",
+                                inputs=["Runtime state context"],
+                                conditions=[line_str[:60]],
+                                outputs=["Branch transition decision"],
+                                db_references=[]
+                            ))
+                            rule_idx += 1
+                            if len(rules) >= 6:
+                                break
+            except Exception:
+                pass
+            if len(rules) >= 6:
+                break
+
+    # 3. Fallback to default high-fidelity baseline if repository is empty
     if not rules:
         rules = _default_business_rules()
 
@@ -65,6 +104,10 @@ def _derive_rule_name(evidence: str, category: str) -> str:
         return "Reservation timeout handling"
     if "po" in ev_lower or "format" in ev_lower or "validator" in ev_lower:
         return "PO number format"
+    if "bootstrap" in ev_lower or "entry" in ev_lower:
+        return "Application bootstrap initialization contract"
+    if "domain" in ev_lower or "workflow" in ev_lower:
+        return "Core domain workflow invariants"
     return f"{category} rule enforcement"
 
 
@@ -102,7 +145,7 @@ def _default_business_rules() -> List[BusinessRule]:
             name="Loyalty discount eligibility",
             category="Discounts",
             description="Gold customers receive 12% off eligible lines after tax region is resolved.",
-            source="DiscountEngine.java:118–146",
+            source="DiscountEngine.java:118-146",
             confidence=96,
             impact="High",
             review="Verified",
@@ -120,7 +163,7 @@ def _default_business_rules() -> List[BusinessRule]:
             name="Credit hold override",
             category="Eligibility",
             description="Orders on credit hold may proceed only with ADMIN_OVERRIDE and an audit reason.",
-            source="PermissionMap.java:71–103",
+            source="PermissionMap.java:71-103",
             confidence=92,
             impact="Critical",
             review="Unreviewed",
@@ -138,7 +181,7 @@ def _default_business_rules() -> List[BusinessRule]:
             name="Reservation timeout handling",
             category="Transactions",
             description="A warehouse timeout remains pending for reconciliation rather than failing.",
-            source="warehouse.wsdl:204–232",
+            source="warehouse.wsdl:204-232",
             confidence=84,
             impact="High",
             review="Needs Investigation",
@@ -156,7 +199,7 @@ def _default_business_rules() -> List[BusinessRule]:
             name="PO number format",
             category="Validation",
             description="Enterprise orders require a region-prefixed purchase order number.",
-            source="OrderValidator.java:55–79",
+            source="OrderValidator.java:55-79",
             confidence=78,
             impact="Medium",
             review="Unreviewed",
@@ -170,4 +213,3 @@ def _default_business_rules() -> List[BusinessRule]:
             db_references=["ACCOUNTS"]
         )
     ]
-

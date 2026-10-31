@@ -219,6 +219,31 @@ class TokenUsage(BaseModel):
     estimated: bool = False
 
 
+class TechnologyVersionAudit(BaseModel):
+    id: str
+    component: str
+    category: str  # Language, Runtime, Framework, Library, Database Driver, Build Tool, Container
+    current_version: str
+    version_type: str = "declared"  # exact, ranged, lockfile_resolved, inferred, unknown
+    resolved_version: Optional[str] = None
+    recommended_version: str
+    support_status: str  # Supported, Deprecated, End-of-Life, Unknown
+    security_status: str = "No Known Vulnerabilities"
+    upgrade_priority: str  # Critical, High, Medium, Low, No Upgrade Needed
+    reason: str
+    compatibility_impact: str
+    source_evidence: str  # Manifest file path & line
+    suggested_action: str  # Keep, Patch, Upgrade, Replace, Investigate, No Action
+    # Detailed explanation fields for modal inspection (Requirement 6):
+    benefits: str = ""
+    risks_and_breaking_changes: str = ""
+    dependencies_affected: List[str] = Field(default_factory=list)
+    recommended_upgrade_path: str = ""
+    testing_requirements: str = ""
+    priority_basis: str = ""
+    verified: bool = True
+
+
 class AnalysisRecord(BaseModel):
     id: str
     project_name: str
@@ -243,6 +268,7 @@ class AnalysisRecord(BaseModel):
     product_profile: Optional[ProductProfile] = None
     pipelines: List[ProductPipeline] = Field(default_factory=list)
     module_tree: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    version_audit: List[TechnologyVersionAudit] = Field(default_factory=list)
     token_usage: Optional[TokenUsage] = None
     executive_summary: str = ""
     limitations: List[str] = Field(default_factory=list)
