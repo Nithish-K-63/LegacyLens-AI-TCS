@@ -283,3 +283,4 @@ with open('frontend/src/App.jsx', 'w', encoding='utf-8', newline='\n') as f:
     f.write(updated)
 
 print('Successfully replaced RiskHeatmapPage')
+

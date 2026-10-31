@@ -208,3 +208,4 @@ def test_repository_module_tree_evidence_counting():
     src_node = next(n for n in tree if n["name"] == "src")
     assert src_node["evidence_count"] == 1
     assert src_node["size_bytes"] == 3584
+
