@@ -4,7 +4,7 @@
 
 OmniStrat is an end-to-end autonomous legacy modernization intelligence platform that analyzes legacy codebases (Python, Java, COBOL, SQL, XML/WSDL, JavaScript, TypeScript) safely without runtime execution. It extracts core business rules, maps observed and inferred module dependencies, assesses modernization risk, visualizes heatmaps with file-level drill-down, deduplicates evidence across static and AI stages, and proposes phased strangler migration roadmaps and regression test specifications.
 
----
+---....
 
 ## 1. Architecture Overview
 
